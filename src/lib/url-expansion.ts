@@ -1,0 +1,147 @@
+import { readSyncCache, writeSyncCache } from "./sync-cache";
+import type { UrlExpansionItem } from "./types";
+
+const SUCCESS_CACHE_TTL_MS = 365 * 24 * 60 * 60 * 1000;
+const FAILURE_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+const URL_REGEX = /https?:\/\/[^\s<>"')\]]+/g;
+
+interface CachedUrlExpansion {
+	expandedUrl: string;
+	finalUrl: string;
+	status: UrlExpansionItem["status"];
+	title?: string;
+	description?: string | null;
+	error?: string;
+}
+
+export interface ExpandUrlsOptions {
+	refresh?: boolean;
+	successMaxAgeMs?: number;
+	failureMaxAgeMs?: number;
+	fetchImpl?: typeof fetch;
+}
+
+function cacheKeyForUrl(url: string) {
+	return `url:expand:${url}`;
+}
+
+function isFresh(updatedAt: string, maxAgeMs: number) {
+	return Date.now() - new Date(updatedAt).getTime() <= maxAgeMs;
+}
+
+function trimTrailingPunctuation(url: string) {
+	return url.replace(/[.,;:!?]+$/g, "");
+}
+
+export function extractUrls(text: string) {
+	return Array.from(
+		new Set(
+			Array.from(text.matchAll(URL_REGEX), (match) =>
+				trimTrailingPunctuation(match[0]),
+			),
+		),
+	).filter((url) => url.length > 0);
+}
+
+function toExpansionItem(
+	url: string,
+	value: CachedUrlExpansion,
+	source: UrlExpansionItem["source"],
+	updatedAt: string,
+): UrlExpansionItem {
+	return {
+		url,
+		expandedUrl: value.expandedUrl,
+		finalUrl: value.finalUrl,
+		status: value.status,
+		source,
+		...(value.title ? { title: value.title } : {}),
+		...(value.description !== undefined
+			? { description: value.description }
+			: {}),
+		...(value.error ? { error: value.error } : {}),
+		updatedAt,
+	};
+}
+
+async function fetchExpansion(
+	url: string,
+	fetchImpl: typeof fetch,
+): Promise<CachedUrlExpansion> {
+	try {
+		let response = await fetchImpl(url, {
+			method: "HEAD",
+			redirect: "follow",
+			headers: { "user-agent": "birdclaw/0.3 url-expander" },
+		});
+
+		if (!response.url || response.url === url || response.status >= 400) {
+			response = await fetchImpl(url, {
+				method: "GET",
+				redirect: "follow",
+				headers: { "user-agent": "birdclaw/0.3 url-expander" },
+			});
+		}
+
+		const finalUrl = response.url || url;
+		return {
+			expandedUrl: finalUrl,
+			finalUrl,
+			status: response.ok || finalUrl !== url ? "hit" : "miss",
+			...(response.ok ? {} : { error: `HTTP ${response.status}` }),
+		};
+	} catch (error) {
+		return {
+			expandedUrl: url,
+			finalUrl: url,
+			status: "error",
+			error: error instanceof Error ? error.message : String(error),
+		};
+	}
+}
+
+export async function expandUrls(
+	urls: string[],
+	options: ExpandUrlsOptions = {},
+): Promise<UrlExpansionItem[]> {
+	const uniqueUrls = Array.from(new Set(urls));
+	const fetchImpl = options.fetchImpl ?? globalThis.fetch;
+	const results: UrlExpansionItem[] = [];
+
+	for (const url of uniqueUrls) {
+		const cached = readSyncCache<CachedUrlExpansion>(cacheKeyForUrl(url));
+		if (cached && !options.refresh) {
+			const maxAge =
+				cached.value.status === "hit"
+					? (options.successMaxAgeMs ?? SUCCESS_CACHE_TTL_MS)
+					: (options.failureMaxAgeMs ?? FAILURE_CACHE_TTL_MS);
+			if (isFresh(cached.updatedAt, maxAge)) {
+				results.push(
+					toExpansionItem(url, cached.value, "cache", cached.updatedAt),
+				);
+				continue;
+			}
+		}
+
+		const value = await fetchExpansion(url, fetchImpl);
+		const updatedAt = writeSyncCache(cacheKeyForUrl(url), value);
+		results.push(toExpansionItem(url, value, "network", updatedAt));
+	}
+
+	return results;
+}
+
+export async function expandUrlsFromTexts(
+	texts: string[],
+	options: ExpandUrlsOptions = {},
+) {
+	return expandUrls(
+		texts.flatMap((text) => extractUrls(text)),
+		options,
+	);
+}
+
+export const __test__ = {
+	cacheKeyForUrl,
+	trimTrailingPunctuation,
+};

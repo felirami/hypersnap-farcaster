@@ -36,6 +36,7 @@ import {
 	exportMentionsViaCachedXurl,
 } from "#/lib/mentions-live";
 import { hydrateProfilesFromX } from "#/lib/profile-hydration";
+import { resolveProfilesForIds } from "#/lib/profile-resolver";
 import { inspectProfileReplies } from "#/lib/profile-replies";
 import { runResearchMode } from "#/lib/research";
 import {
@@ -51,6 +52,8 @@ import {
 	type TimelineCollectionMode,
 } from "#/lib/timeline-collections-live";
 import { syncHomeTimeline } from "#/lib/timeline-live";
+import { expandUrlsFromTexts } from "#/lib/url-expansion";
+import { formatWhois, runWhois } from "#/lib/whois";
 
 const program = new Command();
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -98,6 +101,56 @@ function parseNonNegativeIntegerOption(
 function resolveActionOptions(options: { transport?: string }) {
 	return {
 		transport: options.transport as ActionsTransport | undefined,
+	};
+}
+
+async function enrichDmItems(
+	query: Parameters<typeof listDmConversations>[0],
+	options: {
+		resolveProfiles?: boolean;
+		expandUrls?: boolean;
+		refreshProfileCache?: boolean;
+		refreshUrlCache?: boolean;
+		xurlFallback?: boolean;
+	},
+) {
+	let items = listDmConversations(query);
+	const profileResolution = options.resolveProfiles
+		? await resolveProfilesForIds(
+				items.map((item) => item.participant.id),
+				{
+					refresh: options.refreshProfileCache,
+					xurlFallback: options.xurlFallback ?? true,
+				},
+			)
+		: undefined;
+	if (profileResolution) {
+		items = listDmConversations(query);
+	}
+
+	const urlExpansions = options.expandUrls
+		? await expandUrlsFromTexts(
+				items.flatMap((item) => [
+					item.lastMessagePreview,
+					item.searchSnippet ?? "",
+					...(item.matches ?? []).flatMap((match) => [
+						...match.before.map((message) => message.text),
+						match.message.text,
+						...match.after.map((message) => message.text),
+					]),
+				]),
+				{ refresh: options.refreshUrlCache },
+			)
+		: undefined;
+
+	if (!profileResolution && !urlExpansions) {
+		return items;
+	}
+
+	return {
+		items,
+		...(profileResolution ? { profileResolution } : {}),
+		...(urlExpansions ? { urlExpansions } : {}),
 	};
 }
 
@@ -251,17 +304,37 @@ searchCommand
 	.option("--min-influence-score <n>", "Minimum derived influence score")
 	.option("--max-influence-score <n>", "Maximum derived influence score")
 	.option("--sort <mode>", "recent or influence", "recent")
+	.option(
+		"--context <n>",
+		"Include N messages before and after each match",
+		"0",
+	)
+	.option(
+		"--resolve-profiles",
+		"Resolve placeholder DM profiles through cache/bird/xurl",
+	)
+	.option("--expand-urls", "Expand URLs through the persistent URL cache")
+	.option("--refresh-profile-cache", "Bypass profile lookup cache")
+	.option("--refresh-url-cache", "Bypass URL expansion cache")
+	.option(
+		"--no-xurl-fallback",
+		"Do not fall back to xurl after bird profile lookup",
+	)
 	.option("--replied", "Only replied threads")
 	.option("--unreplied", "Only unreplied threads")
 	.option("--limit <n>", "Limit results", "20")
 	.action(async (query, options) => {
 		await autoUpdateBeforeRead();
+		const context = parseNonNegativeIntegerOption(options.context, "--context");
+		if (context === undefined) {
+			return;
+		}
 		const replyFilter = options.replied
 			? "replied"
 			: options.unreplied
 				? "unreplied"
 				: "all";
-		const items = listDmConversations({
+		const dmQuery = {
 			search: query,
 			participant: options.participant,
 			minFollowers: options.minFollowers
@@ -278,9 +351,57 @@ searchCommand
 				: undefined,
 			sort: options.sort === "influence" ? "influence" : "recent",
 			replyFilter,
+			context,
 			limit: Number(options.limit),
+		} as const;
+		const items = await enrichDmItems(dmQuery, {
+			resolveProfiles: Boolean(options.resolveProfiles),
+			expandUrls: Boolean(options.expandUrls),
+			refreshProfileCache: Boolean(options.refreshProfileCache),
+			refreshUrlCache: Boolean(options.refreshUrlCache),
+			xurlFallback: options.xurlFallback,
 		});
 		print(items, program.opts().json ?? false);
+	});
+
+program
+	.command("whois <query>")
+	.description("Identify likely people or orgs from local DMs and tweets")
+	.option("--account <accountId>", "Account id")
+	.option("--no-dms", "Do not search DMs")
+	.option("--tweets", "Include local tweet search evidence")
+	.option("--no-resolve-profiles", "Do not resolve placeholder profiles")
+	.option("--no-expand-urls", "Do not expand URLs")
+	.option("--refresh-profile-cache", "Bypass profile lookup cache")
+	.option("--refresh-url-cache", "Bypass URL expansion cache")
+	.option(
+		"--no-xurl-fallback",
+		"Do not fall back to xurl after bird profile lookup",
+	)
+	.option("--context <n>", "DM messages before and after each match", "4")
+	.option("--limit <n>", "Limit candidates", "10")
+	.action(async (query, options) => {
+		await autoUpdateBeforeRead();
+		const context = parseNonNegativeIntegerOption(options.context, "--context");
+		if (context === undefined) {
+			return;
+		}
+		const result = await runWhois(query, {
+			account: options.account,
+			dms: options.dms,
+			tweets: Boolean(options.tweets),
+			resolveProfiles: options.resolveProfiles,
+			expandUrls: options.expandUrls,
+			refreshProfileCache: Boolean(options.refreshProfileCache),
+			refreshUrlCache: Boolean(options.refreshUrlCache),
+			xurlFallback: options.xurlFallback,
+			context,
+			limit: Number(options.limit),
+		});
+		print(
+			program.opts().json ? result : formatWhois(result),
+			program.opts().json ?? false,
+		);
 	});
 
 program
@@ -547,6 +668,17 @@ dmsCommand
 	.option("--min-influence-score <n>", "Minimum derived influence score")
 	.option("--max-influence-score <n>", "Maximum derived influence score")
 	.option("--sort <mode>", "recent or influence", "recent")
+	.option(
+		"--resolve-profiles",
+		"Resolve placeholder DM profiles through cache/bird/xurl",
+	)
+	.option("--expand-urls", "Expand URLs through the persistent URL cache")
+	.option("--refresh-profile-cache", "Bypass profile lookup cache")
+	.option("--refresh-url-cache", "Bypass URL expansion cache")
+	.option(
+		"--no-xurl-fallback",
+		"Do not fall back to xurl after bird profile lookup",
+	)
 	.option("--replied", "Only replied threads")
 	.option("--unreplied", "Only unreplied threads")
 	.option("--limit <n>", "Limit results", "20")
@@ -567,25 +699,34 @@ dmsCommand
 		} else {
 			await autoUpdateBeforeRead();
 		}
-		const items = listDmConversations({
-			account: options.account,
-			participant: options.participant,
-			minFollowers: options.minFollowers
-				? Number(options.minFollowers)
-				: undefined,
-			maxFollowers: options.maxFollowers
-				? Number(options.maxFollowers)
-				: undefined,
-			minInfluenceScore: options.minInfluenceScore
-				? Number(options.minInfluenceScore)
-				: undefined,
-			maxInfluenceScore: options.maxInfluenceScore
-				? Number(options.maxInfluenceScore)
-				: undefined,
-			sort: options.sort === "influence" ? "influence" : "recent",
-			replyFilter,
-			limit: Number(options.limit),
-		});
+		const items = await enrichDmItems(
+			{
+				account: options.account,
+				participant: options.participant,
+				minFollowers: options.minFollowers
+					? Number(options.minFollowers)
+					: undefined,
+				maxFollowers: options.maxFollowers
+					? Number(options.maxFollowers)
+					: undefined,
+				minInfluenceScore: options.minInfluenceScore
+					? Number(options.minInfluenceScore)
+					: undefined,
+				maxInfluenceScore: options.maxInfluenceScore
+					? Number(options.maxInfluenceScore)
+					: undefined,
+				sort: options.sort === "influence" ? "influence" : "recent",
+				replyFilter,
+				limit: Number(options.limit),
+			},
+			{
+				resolveProfiles: Boolean(options.resolveProfiles),
+				expandUrls: Boolean(options.expandUrls),
+				refreshProfileCache: Boolean(options.refreshProfileCache),
+				refreshUrlCache: Boolean(options.refreshUrlCache),
+				xurlFallback: options.xurlFallback,
+			},
+		);
 		print(items, program.opts().json ?? false);
 	});
 

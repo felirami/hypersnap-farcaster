@@ -73,6 +73,19 @@ export interface BirdDmsResponse {
 	events: BirdDmEvent[];
 }
 
+interface BirdUserOverviewPayload {
+	user?: {
+		id?: string;
+		username?: string;
+		name?: string;
+		description?: string;
+		followersCount?: number;
+		followingCount?: number;
+		profileImageUrl?: string;
+		createdAt?: string;
+	};
+}
+
 function toIsoTimestamp(value: string) {
 	const parsed = new Date(value);
 	if (Number.isNaN(parsed.getTime())) {
@@ -445,4 +458,43 @@ export async function listDirectMessagesViaBird({
 	}
 
 	return payload as BirdDmsResponse;
+}
+
+export async function lookupProfileViaBird(
+	usernameOrId: string,
+): Promise<XurlMentionUser | null> {
+	const target = usernameOrId.trim().replace(/^@/, "");
+	if (!target) {
+		return null;
+	}
+
+	const stdout = await runBirdJsonCommand([
+		"user",
+		target,
+		"--json",
+		"--count",
+		"1",
+	]);
+	const payload = parseBirdJson(stdout) as BirdUserOverviewPayload;
+	const user = payload.user;
+	if (!user?.id || !user.username) {
+		return null;
+	}
+
+	return {
+		id: String(user.id),
+		username: String(user.username).replace(/^@/, ""),
+		name: String(user.name ?? user.username),
+		description:
+			typeof user.description === "string" ? user.description : undefined,
+		profile_image_url:
+			typeof user.profileImageUrl === "string"
+				? user.profileImageUrl
+				: undefined,
+		created_at: typeof user.createdAt === "string" ? user.createdAt : undefined,
+		public_metrics: {
+			followers_count: Number(user.followersCount ?? 0),
+			following_count: Number(user.followingCount ?? 0),
+		},
+	};
 }

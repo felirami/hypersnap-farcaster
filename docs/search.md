@@ -68,20 +68,28 @@ birdclaw search tweets "AI" --author @borderline_handle --limit 20 --json
 ```bash
 birdclaw search dms "prototype" --json
 birdclaw search dms "layout" --min-followers 1000 --min-influence-score 120 --sort influence --json
+birdclaw search dms "blacksmith" --context 4 --resolve-profiles --expand-urls --no-xurl-fallback --json
 ```
 
 DM-specific filters layer follower-count and influence on top of FTS5:
 
-- `--conversation <id>`
 - `--participant <handle-or-id>`
 - `--min-followers <n>` / `--max-followers <n>`
 - `--min-influence-score <n>` / `--max-influence-score <n>`
 - `--sort recent|influence`
+- `--context <n>`
+- `--resolve-profiles`
+- `--expand-urls`
+- `--refresh-profile-cache` / `--refresh-url-cache`
+- `--no-xurl-fallback`
 - `--replied` / `--unreplied`
-- `--since <date>` / `--until <date>`
 - `--limit <n>`
 
 Influence is a derived score that starts with follower count and combines verified status, prior interaction, and ratio signals. It is not authoritative — use it to bucket noisy inboxes, not to rank conversations you already care about.
+
+Use `birdclaw whois <query>` when the task is identity-oriented rather than
+pure search. It ranks candidate DM threads with evidence, optional tweet matches,
+cached profile resolution, and cached URL expansion.
 
 ## Snippets
 

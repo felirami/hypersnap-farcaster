@@ -125,6 +125,25 @@ export interface DmMessageItem {
 	sender: ProfileRecord;
 }
 
+export interface UrlExpansionItem {
+	url: string;
+	expandedUrl: string;
+	finalUrl: string;
+	status: "hit" | "miss" | "error";
+	source: "cache" | "network";
+	title?: string;
+	description?: string | null;
+	error?: string;
+	updatedAt: string;
+}
+
+export interface DmSearchMatchItem {
+	message: DmMessageItem;
+	before: DmMessageItem[];
+	after: DmMessageItem[];
+	urlExpansions?: UrlExpansionItem[];
+}
+
 export interface DmConversationItem {
 	id: string;
 	accountId: string;
@@ -138,6 +157,7 @@ export interface DmConversationItem {
 	influenceScore: number;
 	influenceLabel: string;
 	participant: ProfileRecord;
+	matches?: DmSearchMatchItem[];
 }
 
 export interface TimelineQuery {
@@ -166,6 +186,7 @@ export interface DmQuery {
 	minInfluenceScore?: number;
 	maxInfluenceScore?: number;
 	sort?: "recent" | "influence";
+	context?: number;
 	limit?: number;
 }
 

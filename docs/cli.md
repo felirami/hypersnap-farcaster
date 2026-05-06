@@ -300,18 +300,49 @@ birdclaw search tweets --bookmarked --limit 20 --json
 
 Flags:
 
-- `--conversation <id>`
 - `--participant <handle-or-id>`
 - `--min-followers <n>`
 - `--max-followers <n>`
 - `--min-influence-score <n>`
 - `--max-influence-score <n>`
 - `--sort recent|influence`
+- `--context <n>`
+- `--resolve-profiles`
+- `--expand-urls`
+- `--refresh-profile-cache`
+- `--refresh-url-cache`
+- `--no-xurl-fallback`
 - `--replied`
 - `--unreplied`
-- `--since <date>`
-- `--until <date>`
 - `--limit <n>`
+
+Profile resolution reads the local profile row first, then the persistent lookup
+cache, then `bird user`, then `xurl` unless `--no-xurl-fallback` is set. Failed
+lookups are cached briefly so repeated searches do not keep spending live calls.
+
+### `whois <query>`
+
+Find likely people or orgs from local DM and optional tweet evidence.
+
+Flags:
+
+- `--account <account-id>`
+- `--no-dms`
+- `--tweets`
+- `--no-resolve-profiles`
+- `--no-expand-urls`
+- `--refresh-profile-cache`
+- `--refresh-url-cache`
+- `--no-xurl-fallback`
+- `--context <n>`
+- `--limit <n>`
+
+Examples:
+
+```bash
+birdclaw whois blacksmith --context 4 --no-xurl-fallback --json
+birdclaw whois blacksmith --tweets --no-xurl-fallback
+```
 
 ### `mentions export [query]`
 

@@ -505,6 +505,7 @@ export function listDmConversations({
 	minInfluenceScore,
 	maxInfluenceScore,
 	sort = "recent",
+	context = 0,
 	limit = 20,
 }: DmQuery): DmConversationItem[] {
 	const db = getNativeDb();
@@ -613,7 +614,7 @@ export function listDmConversations({
 		)
 		.all(...joinParams, ...params) as Array<Record<string, unknown>>;
 
-	const items = rows.map((row) => {
+	const items: DmConversationItem[] = rows.map((row) => {
 		const followersCount = Number(row.followers_count);
 		const influenceScore = getInfluenceScore(followersCount);
 		return {
@@ -681,7 +682,23 @@ export function listDmConversations({
 		});
 	}
 
-	return filtered.slice(0, limit);
+	const limited = filtered.slice(0, limit);
+	const normalizedContext = normalizeDmContext(context);
+	if (search?.trim() && normalizedContext > 0 && limited.length > 0) {
+		const matches = getDmSearchMatches({
+			search: search.trim(),
+			conversationIds: limited.map((item) => item.id),
+			context: normalizedContext,
+		});
+		for (const item of limited) {
+			const itemMatches = matches.get(item.id);
+			if (itemMatches && itemMatches.length > 0) {
+				item.matches = itemMatches;
+			}
+		}
+	}
+
+	return limited;
 }
 
 export function getConversationThread(
@@ -747,6 +764,162 @@ export function getConversationThread(
 			}),
 		})),
 	};
+}
+
+function normalizeDmContext(value: number | undefined) {
+	if (typeof value !== "number" || !Number.isFinite(value)) {
+		return 0;
+	}
+	return Math.max(0, Math.min(20, Math.trunc(value)));
+}
+
+function mapDmMessageRow(row: Record<string, unknown>): DmMessageItem {
+	return {
+		id: String(row.id),
+		conversationId: String(row.conversation_id),
+		text: String(row.text),
+		createdAt: String(row.created_at),
+		direction: row.direction as DmMessageItem["direction"],
+		isReplied: Boolean(row.is_replied),
+		mediaCount: Number(row.media_count),
+		sender: toProfile({
+			id: row.profile_id,
+			handle: row.handle,
+			display_name: row.display_name,
+			bio: row.bio,
+			followers_count: row.followers_count,
+			following_count: row.following_count,
+			avatar_hue: row.avatar_hue,
+			avatar_url: row.avatar_url,
+			created_at: row.profile_created_at,
+		}),
+	};
+}
+
+function selectDmMessageSql(where: string, orderBy: string) {
+	return `
+    select
+      m.id,
+      m.conversation_id,
+      m.text,
+      m.created_at,
+      m.direction,
+      m.is_replied,
+      m.media_count,
+      p.id as profile_id,
+      p.handle,
+      p.display_name,
+      p.bio,
+      p.followers_count,
+      p.following_count,
+      p.avatar_hue,
+      p.avatar_url,
+      p.created_at as profile_created_at
+    from dm_messages m
+    join profiles p on p.id = m.sender_profile_id
+    ${where}
+    ${orderBy}
+  `;
+}
+
+function getDmSearchMatches({
+	search,
+	conversationIds,
+	context,
+}: {
+	search: string;
+	conversationIds: string[];
+	context: number;
+}) {
+	const db = getNativeDb();
+	const conversationPlaceholders = conversationIds.map(() => "?").join(", ");
+	const matchRows = db
+		.prepare(
+			`
+      with ranked_matches as (
+        select
+          m.id,
+          m.conversation_id,
+          m.text,
+          m.created_at,
+          m.direction,
+          m.is_replied,
+          m.media_count,
+          p.id as profile_id,
+          p.handle,
+          p.display_name,
+          p.bio,
+          p.followers_count,
+          p.following_count,
+          p.avatar_hue,
+          p.avatar_url,
+          p.created_at as profile_created_at,
+          row_number() over (
+            partition by m.conversation_id
+            order by m.created_at desc, m.id desc
+          ) as match_rank
+        from dm_messages m
+        join dm_fts on dm_fts.message_id = m.id
+        join profiles p on p.id = m.sender_profile_id
+        where dm_fts.text match ?
+          and m.conversation_id in (${conversationPlaceholders})
+      )
+      select *
+      from ranked_matches
+      where match_rank <= 3
+      order by created_at desc, id desc
+      `,
+		)
+		.all(search, ...conversationIds) as Array<Record<string, unknown>>;
+
+	const beforeStatement = db.prepare(
+		selectDmMessageSql(
+			`
+      where m.conversation_id = ?
+        and (m.created_at < ? or (m.created_at = ? and m.id < ?))
+    `,
+			"order by m.created_at desc, m.id desc limit ?",
+		),
+	);
+	const afterStatement = db.prepare(
+		selectDmMessageSql(
+			`
+      where m.conversation_id = ?
+        and (m.created_at > ? or (m.created_at = ? and m.id > ?))
+    `,
+			"order by m.created_at asc, m.id asc limit ?",
+		),
+	);
+	const grouped = new Map<string, DmConversationItem["matches"]>();
+
+	for (const row of matchRows) {
+		const message = mapDmMessageRow(row);
+		const before = (
+			beforeStatement.all(
+				message.conversationId,
+				message.createdAt,
+				message.createdAt,
+				message.id,
+				context,
+			) as Array<Record<string, unknown>>
+		)
+			.map(mapDmMessageRow)
+			.reverse();
+		const after = (
+			afterStatement.all(
+				message.conversationId,
+				message.createdAt,
+				message.createdAt,
+				message.id,
+				context,
+			) as Array<Record<string, unknown>>
+		).map(mapDmMessageRow);
+		const matches = grouped.get(message.conversationId) ?? [];
+		matches.push({ message, before, after });
+		grouped.set(message.conversationId, matches);
+	}
+
+	return grouped;
 }
 
 export function queryResource(

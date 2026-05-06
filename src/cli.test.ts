@@ -15,6 +15,10 @@ const exportMentionItemsMock = vi.fn();
 const exportMentionsViaCachedBirdMock = vi.fn();
 const exportMentionsViaCachedXurlMock = vi.fn();
 const syncDirectMessagesViaCachedBirdMock = vi.fn();
+const resolveProfilesForIdsMock = vi.fn();
+const expandUrlsFromTextsMock = vi.fn();
+const runWhoisMock = vi.fn();
+const formatWhoisMock = vi.fn();
 const listBlocksMock = vi.fn();
 const addMuteMock = vi.fn();
 const listMutesMock = vi.fn();
@@ -117,6 +121,11 @@ vi.mock("#/lib/profile-hydration", () => ({
 		hydrateProfilesFromXMock(...args),
 }));
 
+vi.mock("#/lib/profile-resolver", () => ({
+	resolveProfilesForIds: (...args: unknown[]) =>
+		resolveProfilesForIdsMock(...args),
+}));
+
 vi.mock("#/lib/profile-replies", () => ({
 	inspectProfileReplies: (...args: unknown[]) =>
 		inspectProfileRepliesMock(...args),
@@ -138,6 +147,15 @@ vi.mock("#/lib/queries", () => ({
 vi.mock("#/lib/timeline-collections-live", () => ({
 	syncTimelineCollection: (...args: unknown[]) =>
 		syncTimelineCollectionMock(...args),
+}));
+
+vi.mock("#/lib/url-expansion", () => ({
+	expandUrlsFromTexts: (...args: unknown[]) => expandUrlsFromTextsMock(...args),
+}));
+
+vi.mock("#/lib/whois", () => ({
+	formatWhois: (...args: unknown[]) => formatWhoisMock(...args),
+	runWhois: (...args: unknown[]) => runWhoisMock(...args),
 }));
 
 vi.mock("node:child_process", () => ({
@@ -168,6 +186,10 @@ describe("cli", () => {
 		exportMentionsViaCachedBirdMock.mockReset();
 		exportMentionsViaCachedXurlMock.mockReset();
 		syncDirectMessagesViaCachedBirdMock.mockReset();
+		resolveProfilesForIdsMock.mockReset();
+		expandUrlsFromTextsMock.mockReset();
+		runWhoisMock.mockReset();
+		formatWhoisMock.mockReset();
 		listBlocksMock.mockReset();
 		addMuteMock.mockReset();
 		listMutesMock.mockReset();
@@ -255,6 +277,26 @@ describe("cli", () => {
 			conversations: 1,
 			messages: 2,
 		});
+		resolveProfilesForIdsMock.mockResolvedValue([
+			{ profileId: "profile_user_42", status: "hit", source: "cache" },
+		]);
+		expandUrlsFromTextsMock.mockResolvedValue([
+			{
+				url: "https://t.co/demo",
+				finalUrl: "https://example.com/demo",
+				expandedUrl: "https://example.com/demo",
+				status: "hit",
+				source: "cache",
+				updatedAt: "2026-05-01T00:00:00.000Z",
+			},
+		]);
+		runWhoisMock.mockResolvedValue({
+			query: "blacksmith",
+			candidates: [],
+			relatedTweets: [],
+			urlExpansions: [],
+		});
+		formatWhoisMock.mockReturnValue("Whois: blacksmith");
 		listBlocksMock.mockReturnValue([{ accountId: "acct_primary" }]);
 		addMuteMock.mockResolvedValue({ ok: true, action: "mute" });
 		listMutesMock.mockReturnValue([{ accountId: "acct_primary" }]);
@@ -674,6 +716,7 @@ describe("cli", () => {
 			maxInfluenceScore: 120,
 			sort: "influence",
 			replyFilter: "unreplied",
+			context: 0,
 			limit: 9,
 		});
 		expect(listDmConversationsMock).toHaveBeenCalledWith({
@@ -783,6 +826,7 @@ describe("cli", () => {
 			maxInfluenceScore: undefined,
 			sort: "recent",
 			replyFilter: "all",
+			context: 0,
 			limit: 20,
 		});
 		expect(listInboxItemsMock).toHaveBeenCalledWith({
@@ -798,6 +842,83 @@ describe("cli", () => {
 			"tweet_2",
 			"Reply text",
 		);
+	});
+
+	it("dispatches cached DM enrichment and whois commands", async () => {
+		listDmConversationsMock.mockReturnValue([
+			{
+				id: "dm_1",
+				lastMessagePreview: "see https://t.co/demo",
+				participant: { id: "profile_user_42" },
+				matches: [
+					{
+						message: { text: "blacksmith https://t.co/demo" },
+						before: [],
+						after: [],
+					},
+				],
+			},
+		]);
+		const { runCli } = await loadCli();
+
+		await runCli([
+			"node",
+			"birdclaw",
+			"--json",
+			"search",
+			"dms",
+			"blacksmith",
+			"--context",
+			"2",
+			"--resolve-profiles",
+			"--expand-urls",
+			"--refresh-profile-cache",
+			"--no-xurl-fallback",
+		]);
+		await runCli([
+			"node",
+			"birdclaw",
+			"whois",
+			"blacksmith",
+			"--tweets",
+			"--context",
+			"3",
+			"--no-xurl-fallback",
+		]);
+
+		expect(listDmConversationsMock).toHaveBeenCalledWith(
+			expect.objectContaining({
+				search: "blacksmith",
+				context: 2,
+			}),
+		);
+		expect(resolveProfilesForIdsMock).toHaveBeenCalledWith(
+			["profile_user_42"],
+			{
+				refresh: true,
+				xurlFallback: false,
+			},
+		);
+		expect(expandUrlsFromTextsMock).toHaveBeenCalledWith(
+			expect.arrayContaining([
+				"see https://t.co/demo",
+				"blacksmith https://t.co/demo",
+			]),
+			{ refresh: false },
+		);
+		expect(runWhoisMock).toHaveBeenCalledWith("blacksmith", {
+			account: undefined,
+			dms: true,
+			tweets: true,
+			resolveProfiles: true,
+			expandUrls: true,
+			refreshProfileCache: false,
+			refreshUrlCache: false,
+			xurlFallback: false,
+			context: 3,
+			limit: 10,
+		});
+		expect(formatWhoisMock).toHaveBeenCalled();
 	});
 
 	it("prints quality reasons for tweet search when requested", async () => {

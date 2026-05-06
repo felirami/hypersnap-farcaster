@@ -454,6 +454,41 @@ describe("bird transport wrapper", () => {
 		expectBirdCommandCall(1, ["read", "tweet_1", "--json"]);
 	});
 
+	it("looks up profiles through bird user json", async () => {
+		process.env.BIRDCLAW_BIRD_COMMAND = "/tmp/bird";
+		mockBirdStdoutOnce(
+			JSON.stringify({
+				user: {
+					id: "42",
+					username: "sam",
+					name: "Sam",
+					description: "Working on systems",
+					followersCount: 123,
+					followingCount: 45,
+					profileImageUrl:
+						"https://pbs.twimg.com/profile_images/42/avatar_normal.jpg",
+					createdAt: "Mon Jan 01 00:00:00 +0000 2024",
+				},
+			}),
+		);
+		const { lookupProfileViaBird } = await import("./bird");
+
+		await expect(lookupProfileViaBird("42")).resolves.toEqual({
+			id: "42",
+			username: "sam",
+			name: "Sam",
+			description: "Working on systems",
+			profile_image_url:
+				"https://pbs.twimg.com/profile_images/42/avatar_normal.jpg",
+			created_at: "Mon Jan 01 00:00:00 +0000 2024",
+			public_metrics: {
+				followers_count: 123,
+				following_count: 45,
+			},
+		});
+		expectBirdCommandCall(1, ["user", "42", "--json", "--count", "1"]);
+	});
+
 	it("rejects unexpected direct messages json", async () => {
 		process.env.BIRDCLAW_BIRD_COMMAND = "/tmp/bird";
 		mockBirdStdoutOnce(

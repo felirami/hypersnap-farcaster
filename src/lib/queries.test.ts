@@ -176,6 +176,56 @@ describe("birdclaw queries", () => {
 		);
 	});
 
+	it("returns nearby DM context when requested for search results", () => {
+		setupTempHome();
+		const db = getNativeDb();
+		const messages = [
+			{
+				id: "msg_dm_context_before",
+				text: "before the identity hint",
+				createdAt: "2026-03-08T11:00:00.000Z",
+			},
+			{
+				id: "msg_dm_context_match",
+				text: "needlectx is the blacksmith cofounder",
+				createdAt: "2026-03-08T11:01:00.000Z",
+			},
+			{
+				id: "msg_dm_context_after",
+				text: "after the identity hint",
+				createdAt: "2026-03-08T11:02:00.000Z",
+			},
+		];
+
+		for (const message of messages) {
+			db.prepare(
+				`
+        insert into dm_messages (
+          id, conversation_id, sender_profile_id, text, created_at, direction, is_replied, media_count
+        ) values (?, 'dm_003', 'profile_me', ?, ?, 'outbound', 1, 0)
+        `,
+			).run(message.id, message.text, message.createdAt);
+			db.prepare("insert into dm_fts (message_id, text) values (?, ?)").run(
+				message.id,
+				message.text,
+			);
+		}
+
+		const filtered = listDmConversations({
+			search: "needlectx",
+			context: 1,
+		});
+
+		expect(filtered[0]?.matches?.[0]).toMatchObject({
+			message: expect.objectContaining({
+				id: "msg_dm_context_match",
+				text: "needlectx is the blacksmith cofounder",
+			}),
+			before: [expect.objectContaining({ id: "msg_dm_context_before" })],
+			after: [expect.objectContaining({ id: "msg_dm_context_after" })],
+		});
+	});
+
 	it("omits DM search snippets when no query is provided", () => {
 		setupTempHome();
 

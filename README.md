@@ -275,10 +275,16 @@ birdclaw research --account acct_primary --out ~/research/codex.md
 ```bash
 pnpm cli search dms "prototype" --json
 pnpm cli search dms "layout" --min-followers 1000 --min-influence-score 120 --sort influence --json
+pnpm cli search dms "blacksmith" --context 4 --resolve-profiles --expand-urls --no-xurl-fallback --json
+pnpm cli whois "blacksmith" --tweets --context 4 --no-xurl-fallback --json
 pnpm cli dms sync --limit 50 --refresh --json
 pnpm cli dms list --refresh --limit 10 --json
 pnpm cli dms list --unreplied --min-followers 500 --min-influence-score 90 --sort influence --json
 ```
+
+`--resolve-profiles` fills archive-imported numeric DM profiles through the local
+cache first, then `bird`, then `xurl` unless `--no-xurl-fallback` is set. URL
+expansion also uses the persistent cache before touching the network.
 
 ### AI inbox
 
