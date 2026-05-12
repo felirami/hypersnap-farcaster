@@ -9,6 +9,11 @@ import { registerModerationCommands } from "#/cli-moderation";
 import { findArchives } from "#/lib/archive-finder";
 import { importArchive } from "#/lib/archive-import";
 import {
+	AuthoredSyncError,
+	syncAuthoredTweets,
+	type AuthoredSyncMode,
+} from "#/lib/authored-live";
+import {
 	exportBackup,
 	importBackup,
 	maybeAutoSyncBackup,
@@ -281,7 +286,7 @@ const searchCommand = program
 
 searchCommand
 	.command("tweets [query]")
-	.option("--resource <resource>", "home or mentions", "home")
+	.option("--resource <resource>", "home, mentions, or authored", "home")
 	.option("--replied", "Only replied items")
 	.option("--unreplied", "Only unreplied items")
 	.option("--since <date>", "Include tweets created at or after this date")
@@ -312,7 +317,12 @@ searchCommand
 				? "unreplied"
 				: "all";
 		const items = listTimelineItems({
-			resource: options.resource === "mentions" ? "mentions" : "home",
+			resource:
+				options.resource === "mentions"
+					? "mentions"
+					: options.resource === "authored"
+						? "authored"
+						: "home",
 			search: query,
 			replyFilter,
 			since: options.since,
@@ -674,6 +684,48 @@ syncCommand
 		});
 		await autoSyncAfterWrite();
 		print(result, true);
+	});
+
+syncCommand
+	.command("authored")
+	.description("Refresh authenticated authored tweets through xurl")
+	.option("--account <accountId>", "Account id")
+	.option("--mode <mode>", "xurl", "xurl")
+	.option("--limit <n>", "X API page size", "100")
+	.option("--max-pages <n>", "Stop after N pages and resume later")
+	.option("--since-id <tweetId>", "Override the stored since_id cursor")
+	.option(
+		"--until-id <tweetId>",
+		"Fetch tweets older than this id without moving the cursor",
+	)
+	.action(async (options) => {
+		try {
+			const result = await syncAuthoredTweets({
+				account: options.account,
+				mode: options.mode as AuthoredSyncMode,
+				limit: Number(options.limit),
+				maxPages: options.maxPages ? Number(options.maxPages) : undefined,
+				sinceId: options.sinceId,
+				untilId: options.untilId,
+			});
+			await autoSyncAfterWrite();
+			print(result, true);
+			if (result.partial) {
+				process.exitCode = 5;
+			}
+		} catch (error) {
+			print(
+				{
+					ok: false,
+					kind: "authored",
+					source: "xurl",
+					error: errorMessage(error),
+				},
+				true,
+			);
+			process.exitCode =
+				error instanceof AuthoredSyncError ? error.exitCode : 1;
+		}
 	});
 
 syncCommand

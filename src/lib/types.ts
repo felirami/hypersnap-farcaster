@@ -1,4 +1,4 @@
-export type ResourceKind = "home" | "mentions" | "dms";
+export type ResourceKind = "home" | "mentions" | "authored" | "dms";
 export type InboxKind = "mixed" | "mentions" | "dms";
 
 export type ReplyFilter = "all" | "replied" | "unreplied";
@@ -151,7 +151,7 @@ export interface TimelineItem {
 	id: string;
 	accountId: string;
 	accountHandle: string;
-	kind: "home" | "mention" | "like" | "bookmark";
+	kind: "home" | "mention" | "authored" | "like" | "bookmark";
 	text: string;
 	searchSnippet?: string;
 	createdAt: string;
@@ -479,6 +479,7 @@ export interface XurlMentionData {
 	text: string;
 	created_at: string;
 	conversation_id?: string;
+	attachments?: XurlTweetAttachments;
 	entities?: Record<string, unknown>;
 	referenced_tweets?: XurlReferencedTweet[];
 	public_metrics?: XurlPublicMetrics;
@@ -492,9 +493,12 @@ export interface XurlReferencedTweet {
 
 export interface XurlUserTweet {
 	id: string;
+	author_id?: string;
 	text: string;
 	created_at: string;
 	conversation_id?: string;
+	attachments?: XurlTweetAttachments;
+	entities?: Record<string, unknown>;
 	referenced_tweets?: XurlReferencedTweet[];
 	public_metrics?: XurlPublicMetrics;
 	edit_history_tweet_ids?: string[];
@@ -506,10 +510,38 @@ export interface XurlTweetData {
 	text: string;
 	created_at: string;
 	conversation_id?: string;
+	attachments?: XurlTweetAttachments;
 	entities?: Record<string, unknown>;
 	referenced_tweets?: XurlReferencedTweet[];
 	public_metrics?: XurlPublicMetrics;
 	edit_history_tweet_ids?: string[];
+}
+
+export interface XurlTweetAttachments {
+	media_keys?: string[];
+	poll_ids?: string[];
+}
+
+export interface XurlMedia {
+	media_key: string;
+	type: string;
+	url?: string;
+	preview_image_url?: string;
+	width?: number;
+	height?: number;
+	alt_text?: string;
+}
+
+export interface XurlTweetIncludes {
+	users?: XurlMentionUser[];
+	tweets?: XurlTweetData[];
+	media?: XurlMedia[];
+}
+
+export interface XurlUserTweetsResponse {
+	items: XurlUserTweet[];
+	nextToken: string | null;
+	includes?: XurlTweetIncludes;
 }
 
 export interface ProfileReplyItem {
