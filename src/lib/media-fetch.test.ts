@@ -50,13 +50,14 @@ function archiveTweetFile(
 	tweetId: string,
 	basename: string,
 	ext = ".jpg",
+	kind = "tweets",
 ) {
 	return path.join(
 		root,
 		"media",
 		"originals",
 		"archive",
-		"tweets",
+		kind,
 		tweetId,
 		`${tweetId}-${basename}${ext}`,
 	);
@@ -197,6 +198,36 @@ describe("media fetch", () => {
 		expect(
 			readFileSync(path.join(root, "media", "originals", "demo.jpg")),
 		).toEqual(Buffer.from([9, 8, 7]));
+	});
+
+	it("reuses community archive bytes before fetching from the CDN", async () => {
+		const root = home();
+		const archiveFile = archiveTweetFile(
+			root,
+			"tweet_1",
+			"demo",
+			".jpg",
+			"community",
+		);
+		mkdirSync(path.dirname(archiveFile), { recursive: true });
+		writeFileSync(archiveFile, Buffer.from([6, 5, 4]));
+		insertTweet("tweet_1", [pbs("demo")]);
+		const fetchMock = vi.fn(async () => {
+			throw new Error("must not fetch");
+		});
+
+		const result = await fetchTweetMedia({ fetchImpl: fetchMock, pacingMs: 0 });
+
+		expect(result).toMatchObject({
+			fetched: 1,
+			images_fetched: 1,
+			reused_from_archive: 1,
+			bytes: 3,
+		});
+		expect(fetchMock).not.toHaveBeenCalled();
+		expect(
+			readFileSync(path.join(root, "media", "originals", "demo.jpg")),
+		).toEqual(Buffer.from([6, 5, 4]));
 	});
 
 	it("enforces max-bytes before archive reuse", async () => {

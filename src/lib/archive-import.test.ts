@@ -476,7 +476,6 @@ describe("archive import", () => {
 		expect(bookmarked.map((item) => item.text)).toEqual(["saved archive item"]);
 	}, 30000);
 
-
 	it("extracts archive media files into media originals", async () => {
 		const archivePath = makeMediaArchive();
 		const homeDir = mkdtempSync(path.join(os.tmpdir(), "birdclaw-home-"));

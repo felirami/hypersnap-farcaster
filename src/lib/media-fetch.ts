@@ -439,7 +439,7 @@ function fail(
 /**
  * Archive reuse consumes files extracted by the sibling
  * `feat/import-archive-followers-following` branch into
- * `media/originals/archive/tweets/<tweet_id>/...`.
+ * `media/originals/archive/<kind>/<tweet_id>/...`.
  *
  * This fetcher intentionally does not extract archive ZIP media itself; it only
  * reuses that layout when it is already present.
@@ -449,12 +449,11 @@ function archivePathFor(item: Candidate, mediaOriginalsDir: string) {
 	if (!item.tweetId || !item.mediaKey) return null;
 	const ext = path.extname(item.path);
 	if (!ext) return null;
-	return path.join(
-		mediaOriginalsDir,
-		"archive",
-		"tweets",
-		item.tweetId,
-		`${item.tweetId}-${item.mediaKey}${ext}`,
+	const fileName = `${item.tweetId}-${item.mediaKey}${ext}`;
+	return (
+		archiveTweetDirs(mediaOriginalsDir, item.tweetId)
+			.map((tweetDir) => path.join(tweetDir, fileName))
+			.find((archivePath) => existsSync(archivePath)) ?? null
 	);
 }
 
