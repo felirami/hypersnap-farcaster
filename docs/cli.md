@@ -69,6 +69,7 @@ birdclaw sync dms
 birdclaw sync bookmarks
 birdclaw sync likes
 birdclaw sync timeline
+birdclaw sync mentions
 birdclaw sync mention-threads
 birdclaw sync followers
 birdclaw sync following
@@ -237,7 +238,8 @@ Default:
 - refresh FTS incrementally
 - `sync likes` and `sync bookmarks` use cached live transport; `auto` tries `xurl`, then `bird`
 - `sync timeline` stores the live home timeline through `bird`; it defaults to the chronological Following feed
-- `sync mention-threads` fetches conversation context for recent mentions through `bird thread`; use `--delay-ms` and `--timeout-ms` to stay gentle on live X
+- `sync mentions` ingests recent mentions through `xurl` (default) or `bird` and writes `kind='mention'` rows into the canonical store; this is the cron-friendly ingest path that replaces relying on `mentions export --refresh`
+- `sync mention-threads` fetches conversation context for recent mentions through `bird thread` or `xurl`; pass `--mode xurl` when the `bird` CLI is unavailable, otherwise use `--delay-ms` and `--timeout-ms` to stay gentle on live X
 - `sync followers` and `sync following` default to dry-run and require `--yes` for live sync or fresh-cache merge; `auto` prefers `bird`, then falls back to `xurl`
 
 Common flags:
@@ -259,7 +261,9 @@ birdclaw sync likes --mode auto --limit 100 --refresh --json
 birdclaw sync bookmarks --mode auto --limit 100 --refresh --json
 birdclaw sync bookmarks --mode bird --all --max-pages 5 --limit 100 --refresh --json
 birdclaw sync timeline --limit 100 --refresh --json
-birdclaw sync mention-threads --limit 30 --delay-ms 1500 --timeout-ms 15000 --json
+birdclaw sync mentions --mode xurl --limit 100 --max-pages 3 --refresh --json
+birdclaw sync mention-threads --mode bird --limit 30 --delay-ms 1500 --timeout-ms 15000 --json
+birdclaw sync mention-threads --mode xurl --limit 30 --json
 ```
 
 Follow graph examples:
