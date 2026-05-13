@@ -471,6 +471,46 @@ describe("live authored tweet sync", () => {
 		expect(nextDefaultOptions?.paginationToken).toBeUndefined();
 	});
 
+	it("ignores the stored since_id when until_id backfills older tweets", async () => {
+		makeTempHome();
+		getNativeDb()
+			.prepare(
+				"insert into sync_cache (cache_key, value_json, updated_at) values (?, ?, ?)",
+			)
+			.run(
+				"authored:xurl:acct_primary:cursor",
+				JSON.stringify({
+					sinceId: "600",
+					paginationToken: null,
+					pendingNewestId: null,
+				}),
+				"2026-05-12T12:00:00.000Z",
+			);
+		mocks.listUserTweets.mockResolvedValueOnce({
+			items: [],
+			nextToken: null,
+		});
+		const { syncAuthoredTweets } = await import("./authored-live");
+
+		const result = await syncAuthoredTweets({ limit: 5, untilId: "250" });
+
+		expect(result).toMatchObject({
+			ok: true,
+			sinceId: null,
+			nextSinceId: "600",
+		});
+		const requestOptions = mocks.listUserTweets.mock.calls[0]?.[1] as
+			| Record<string, unknown>
+			| undefined;
+		expect(requestOptions).toEqual(expect.objectContaining({ untilId: "250" }));
+		expect(requestOptions?.sinceId).toBeUndefined();
+		expect(authoredCursor()).toEqual({
+			sinceId: "600",
+			paginationToken: null,
+			pendingNewestId: null,
+		});
+	});
+
 	it("does not duplicate rows when the same page is synced twice", async () => {
 		makeTempHome();
 		const page = {

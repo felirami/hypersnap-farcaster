@@ -752,7 +752,7 @@ export async function syncAuthoredTweets({
 	}
 	const usePersistedPagination =
 		!sinceId && !untilId && Boolean(cursor.paginationToken);
-	const effectiveSinceId = sinceId ?? cursor.sinceId;
+	const effectiveSinceId = sinceId ?? (untilId ? null : cursor.sinceId);
 	let nextToken = usePersistedPagination
 		? (cursor.paginationToken ?? undefined)
 		: undefined;
