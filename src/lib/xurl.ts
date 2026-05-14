@@ -24,6 +24,10 @@ const THREAD_TWEET_FIELDS =
 const BOOKMARKS_MAX_RESULTS_CAP = 90;
 
 type TimelineCollectionEndpoint = "liked_tweets" | "bookmarks";
+type JsonCommandOptions = {
+	timeoutMs?: number;
+	deadlineMs?: number;
+};
 
 let transportStatusCache:
 	| {
@@ -244,9 +248,19 @@ async function runShortcut(
 
 async function runJsonCommand(
 	args: string[],
-	{ timeoutMs }: { timeoutMs?: number } = {},
+	options: JsonCommandOptions = {},
 	attempt = 0,
 ) {
+	const deadlineMs =
+		options.deadlineMs ??
+		(typeof options.timeoutMs === "number" &&
+		Number.isFinite(options.timeoutMs) &&
+		options.timeoutMs > 0
+			? Date.now() + options.timeoutMs
+			: undefined);
+	const timeoutMs = deadlineMs
+		? Math.max(0, deadlineMs - Date.now())
+		: undefined;
 	const controller =
 		typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
 			? new AbortController()
@@ -265,9 +279,15 @@ async function runJsonCommand(
 		if (retryDelayMs === null || attempt >= JSON_RETRY_LIMIT - 1) {
 			throw formatXurlCommandError(error, args);
 		}
+		const remainingMs = deadlineMs
+			? Math.max(0, deadlineMs - Date.now())
+			: undefined;
+		if (remainingMs !== undefined && retryDelayMs >= remainingMs) {
+			throw formatXurlCommandError(error, args);
+		}
 
 		await sleep(retryDelayMs);
-		return runJsonCommand(args, { timeoutMs }, attempt + 1);
+		return runJsonCommand(args, { ...options, deadlineMs }, attempt + 1);
 	} finally {
 		if (timeout) {
 			clearTimeout(timeout);

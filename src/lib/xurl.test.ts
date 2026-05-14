@@ -453,6 +453,21 @@ describe("xurl transport wrapper", () => {
 		}
 	});
 
+	it("does not retry rate-limited thread lookups past the timeout budget", async () => {
+		process.env.BIRDCLAW_XURL_RETRY_BASE_MS = "2000";
+		execFileAsyncMock.mockRejectedValueOnce(
+			Object.assign(new Error("rate limited"), {
+				stdout: JSON.stringify({ status: 429 }),
+			}),
+		);
+		const { getTweetById } = await import("./xurl");
+
+		await expect(getTweetById("tweet_1", { timeoutMs: 1000 })).rejects.toThrow(
+			"rate limited",
+		);
+		expect(execFileAsyncMock).toHaveBeenCalledTimes(1);
+	});
+
 	it("lists liked and bookmarked tweets through raw Twitter endpoints", async () => {
 		execFileAsyncMock
 			.mockResolvedValueOnce({
