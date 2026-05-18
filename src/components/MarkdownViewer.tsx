@@ -11,6 +11,14 @@ type InlineLookup = {
 	profilesByHandle: Map<string, ProfileRecord>;
 };
 
+function normalizeTweetReference(value: string) {
+	return value
+		.trim()
+		.replace(/^\(/, "")
+		.replace(/\)$/, "")
+		.replace(/^tweet_/, "");
+}
+
 function trimBullet(value: string) {
 	return value.replace(/^[-*]\s+/, "");
 }
@@ -67,9 +75,33 @@ function TweetPreviewToken({
 	);
 }
 
+function linkTrailingCitationText(
+	nodes: ReactNode[],
+	tweet: PeriodDigestContext["tweets"][number],
+	key: string,
+) {
+	const last = nodes.at(-1);
+	if (typeof last !== "string") return false;
+
+	const match = /(["“][^"”]+["”])(\s*)$/.exec(last);
+	if (!match) return false;
+
+	const quoted = match[1];
+	const trailing = match[2] ?? "";
+	const before = last.slice(0, match.index);
+	nodes[nodes.length - 1] = before;
+	nodes.push(
+		<TweetPreviewToken key={key} tweet={tweet}>
+			{quoted}
+		</TweetPreviewToken>,
+		trailing,
+	);
+	return true;
+}
+
 function renderInline(text: string, lookup: InlineLookup) {
 	const pattern =
-		/(\*\*[^*]+\*\*|@[A-Za-z0-9_]{1,20}|\b\d{12,25}\b|tweet_[A-Za-z0-9_:-]+)/g;
+		/(\*\*[^*]+\*\*|@[A-Za-z0-9_]{1,20}|\(?\btweet_[A-Za-z0-9_:-]+\)?|\b\d{12,25}\b)/g;
 	const nodes: ReactNode[] = [];
 	let cursor = 0;
 	let match: RegExpExecArray | null;
@@ -115,14 +147,23 @@ function renderInline(text: string, lookup: InlineLookup) {
 			continue;
 		}
 
-		const tweet = lookup.tweetsById.get(token);
+		const tweet = lookup.tweetsById.get(normalizeTweetReference(token));
+		const isParenthesizedTweetRef =
+			token.startsWith("(") && token.endsWith(")");
+		if (
+			tweet &&
+			isParenthesizedTweetRef &&
+			linkTrailingCitationText(nodes, tweet, `${token}-${String(match.index)}`)
+		) {
+			continue;
+		}
 		nodes.push(
 			tweet ? (
 				<TweetPreviewToken
 					key={`${token}-${String(match.index)}`}
 					tweet={tweet}
 				>
-					{token}
+					{isParenthesizedTweetRef ? "source" : token}
 				</TweetPreviewToken>
 			) : (
 				token
@@ -147,7 +188,9 @@ function buildLookup(context?: PeriodDigestContext | null): InlineLookup {
 	const tweetsById = new Map<string, PeriodDigestContext["tweets"][number]>();
 	const profilesByHandle = new Map<string, ProfileRecord>();
 	for (const tweet of context?.tweets ?? []) {
-		tweetsById.set(tweet.id, tweet);
+		const normalized = normalizeTweetReference(tweet.id);
+		tweetsById.set(normalized, tweet);
+		tweetsById.set(`tweet_${normalized}`, tweet);
 		profilesByHandle.set(tweet.author.toLowerCase(), tweet.authorProfile);
 	}
 	return { tweetsById, profilesByHandle };
