@@ -335,6 +335,26 @@ describe("bird transport wrapper", () => {
 		expectBirdCommandCall(1, ["dms", "-n", "5", "--json"]);
 	});
 
+	it("parses the authenticated bird account from whoami output", async () => {
+		process.env.BIRDCLAW_BIRD_COMMAND = "/tmp/bird";
+		mockBirdStdoutOnce(
+			[
+				"📍 Chrome default profile",
+				"🙋 @steipete (Peter Steinberger 2026)",
+				"🪪 25401953",
+				"⚙️ graphql",
+			].join("\n"),
+		);
+
+		const { getAuthenticatedBirdAccount } = await import("./bird");
+
+		await expect(getAuthenticatedBirdAccount()).resolves.toEqual({
+			id: "25401953",
+			username: "steipete",
+		});
+		expectBirdCommandCall(1, ["whoami"]);
+	});
+
 	it("passes message-request DM paging options to bird", async () => {
 		process.env.BIRDCLAW_BIRD_COMMAND = "/tmp/bird";
 		const payload = { success: true, conversations: [], events: [] };
@@ -347,6 +367,7 @@ describe("bird transport wrapper", () => {
 				maxResults: 50,
 				inbox: "requests",
 				maxPages: 2,
+				pageDelayMs: 750,
 			}),
 		).resolves.toEqual(payload);
 		expectBirdCommandCall(1, [
@@ -358,6 +379,8 @@ describe("bird transport wrapper", () => {
 			"requests",
 			"--max-pages",
 			"2",
+			"--page-delay-ms",
+			"750",
 		]);
 	});
 

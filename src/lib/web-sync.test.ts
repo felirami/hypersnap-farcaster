@@ -180,6 +180,7 @@ describe("web sync dispatcher", () => {
 			inbox: "requests",
 			limit: 200,
 			maxPages: 3,
+			pageDelayMs: 750,
 			refresh: true,
 		});
 		expect(result).toMatchObject({

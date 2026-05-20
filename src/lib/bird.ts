@@ -83,6 +83,11 @@ export interface BirdDmsResponse {
 	events: BirdDmEvent[];
 }
 
+export interface BirdAuthenticatedAccount {
+	id?: string;
+	username: string;
+}
+
 export type BirdDmRequestAction = "accept" | "reject" | "block";
 
 export type BirdDmMutationResponse =
@@ -758,16 +763,60 @@ function normalizeBirdDmsPayloadEffect(payload: unknown) {
 	});
 }
 
+function parseBirdWhoami(stdout: string): BirdAuthenticatedAccount {
+	const usernameMatch = stdout.match(/@([A-Za-z0-9_]{1,15})\b/);
+	if (!usernameMatch?.[1]) {
+		throw new Error("bird whoami did not report an authenticated username");
+	}
+	const id = stdout
+		.split(/\r?\n/)
+		.map((line) => line.trim())
+		.map((line) => {
+			const labeled = line.match(/(?:🪪|user_?id:?)[^\d]*(\d{2,})/i);
+			if (labeled?.[1]) {
+				return labeled[1];
+			}
+			if (/[A-Za-z@]/.test(line)) {
+				return undefined;
+			}
+			return line.match(/^\D*(\d{2,})\D*$/)?.[1];
+		})
+		.find((value): value is string => Boolean(value));
+	return {
+		username: usernameMatch[1],
+		...(id ? { id } : {}),
+	};
+}
+
+export function getAuthenticatedBirdAccountEffect(): Effect.Effect<
+	BirdAuthenticatedAccount,
+	unknown
+> {
+	return Effect.gen(function* () {
+		const stdout = yield* runBirdJsonCommandEffect(["whoami"]);
+		return yield* Effect.try({
+			try: () => parseBirdWhoami(stdout),
+			catch: (error) => error,
+		});
+	});
+}
+
+export function getAuthenticatedBirdAccount(): Promise<BirdAuthenticatedAccount> {
+	return runEffectPromise(getAuthenticatedBirdAccountEffect());
+}
+
 export function listDirectMessagesViaBirdEffect({
 	maxResults,
 	inbox = "all",
 	maxPages,
 	allPages = false,
+	pageDelayMs,
 }: {
 	maxResults: number;
 	inbox?: "all" | "accepted" | "requests";
 	maxPages?: number;
 	allPages?: boolean;
+	pageDelayMs?: number;
 }): Effect.Effect<BirdDmsResponse, unknown> {
 	return Effect.gen(function* () {
 		const args = ["dms", "-n", String(maxResults), "--json"];
@@ -778,6 +827,9 @@ export function listDirectMessagesViaBirdEffect({
 			args.push("--all-pages");
 		} else if (typeof maxPages === "number") {
 			args.push("--max-pages", String(maxPages));
+		}
+		if (typeof pageDelayMs === "number" && pageDelayMs > 0) {
+			args.push("--page-delay-ms", String(pageDelayMs));
 		}
 		const stdout = yield* runBirdJsonCommandEffect(args);
 		const payload = yield* parseBirdJsonEffect(stdout);
@@ -790,6 +842,7 @@ export function listDirectMessagesViaBird(options: {
 	inbox?: "all" | "accepted" | "requests";
 	maxPages?: number;
 	allPages?: boolean;
+	pageDelayMs?: number;
 }): Promise<BirdDmsResponse> {
 	return runEffectPromise(listDirectMessagesViaBirdEffect(options));
 }

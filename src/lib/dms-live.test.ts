@@ -6,13 +6,21 @@ import { Effect } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetBirdclawPathsForTests } from "./config";
 import { getConversationThread, listDmConversations } from "./queries";
-import { resetDatabaseForTests } from "./db";
+import { getNativeDb, resetDatabaseForTests } from "./db";
 
 const listDirectMessagesViaBirdMock = vi.fn();
+const getAuthenticatedBirdAccountMock = vi.fn();
 
 vi.mock("./bird", async () => {
 	const { Effect } = await import("effect");
 	return {
+		getAuthenticatedBirdAccount: (...args: unknown[]) =>
+			getAuthenticatedBirdAccountMock(...args),
+		getAuthenticatedBirdAccountEffect: (...args: unknown[]) =>
+			Effect.tryPromise({
+				try: () => getAuthenticatedBirdAccountMock(...args),
+				catch: (error) => error,
+			}),
 		listDirectMessagesViaBird: (...args: unknown[]) =>
 			listDirectMessagesViaBirdMock(...args),
 		listDirectMessagesViaBirdEffect: (...args: unknown[]) =>
@@ -35,6 +43,11 @@ function makeTempHome() {
 describe("cached live DMs", () => {
 	beforeEach(() => {
 		listDirectMessagesViaBirdMock.mockReset();
+		getAuthenticatedBirdAccountMock.mockReset();
+		getAuthenticatedBirdAccountMock.mockResolvedValue({
+			id: "25401953",
+			username: "steipete",
+		});
 	});
 
 	afterEach(() => {
@@ -201,6 +214,282 @@ describe("cached live DMs", () => {
 		await expect(
 			syncDirectMessagesViaCachedBird({ account: "missing", limit: 1 }),
 		).rejects.toThrow("Unknown account: missing");
+	});
+
+	it("refuses to fetch DMs when bird is authenticated as another account", async () => {
+		makeTempHome();
+		getAuthenticatedBirdAccountMock.mockResolvedValueOnce({
+			id: "1995710751097659392",
+			username: "openclaw",
+		});
+		const { syncDirectMessagesViaCachedBird } = await import("./dms-live");
+
+		await expect(
+			syncDirectMessagesViaCachedBird({
+				account: "acct_primary",
+				limit: 5,
+				refresh: true,
+			}),
+		).rejects.toThrow(
+			"bird is authenticated as user 1995710751097659392; refusing to sync into acct_primary (25401953)",
+		);
+		expect(listDirectMessagesViaBirdMock).not.toHaveBeenCalled();
+		expect(listDmConversations({ search: "Wrong account", limit: 10 })).toEqual(
+			[],
+		);
+	});
+
+	it("refuses payloads that do not include the configured account", async () => {
+		makeTempHome();
+		listDirectMessagesViaBirdMock.mockResolvedValueOnce({
+			success: true,
+			conversations: [
+				{
+					id: "999-42",
+					participants: [{ id: "42", username: "sam", name: "Sam Altman" }],
+					messages: [],
+				},
+			],
+			events: [
+				{
+					id: "dm_live_1",
+					conversationId: "999-42",
+					text: "Wrong account",
+					createdAt: "2026-04-25T20:00:00.000Z",
+					senderId: "42",
+					sender: { id: "42", username: "sam", name: "Sam Altman" },
+				},
+			],
+		});
+		const { syncDirectMessagesViaCachedBird } = await import("./dms-live");
+
+		await expect(
+			syncDirectMessagesViaCachedBird({
+				account: "acct_primary",
+				limit: 5,
+				refresh: true,
+			}),
+		).rejects.toThrow(
+			"bird DM payload does not include @steipete; refusing to sync into acct_primary",
+		);
+	});
+
+	it("uses the stable account id when handles or payload users are sparse", async () => {
+		makeTempHome();
+		getAuthenticatedBirdAccountMock.mockResolvedValueOnce({
+			id: "25401953",
+			username: "renamed",
+		});
+		listDirectMessagesViaBirdMock.mockResolvedValueOnce({
+			success: true,
+			conversations: [
+				{
+					id: "25401953-42",
+					participants: [
+						{ id: "25401953" },
+						{ id: "42", username: "sam", name: "Sam Altman" },
+					],
+					messages: [],
+					lastMessageAt: "2026-04-25T20:00:00.000Z",
+				},
+			],
+			events: [
+				{
+					id: "dm_sparse_self",
+					conversationId: "25401953-42",
+					text: "Sparse self",
+					createdAt: "2026-04-25T20:00:00.000Z",
+					senderId: "42",
+					recipientId: "25401953",
+					sender: { id: "42", username: "sam", name: "Sam Altman" },
+				},
+			],
+		});
+		const { syncDirectMessagesViaCachedBird } = await import("./dms-live");
+
+		await expect(
+			syncDirectMessagesViaCachedBird({
+				account: "acct_primary",
+				limit: 5,
+				refresh: true,
+			}),
+		).resolves.toEqual(
+			expect.objectContaining({
+				source: "bird",
+				conversations: 1,
+				messages: 1,
+			}),
+		);
+		expect(getConversationThread("25401953-42")?.messages).toEqual([
+			expect.objectContaining({
+				id: "dm_sparse_self",
+				direction: "inbound",
+			}),
+		]);
+	});
+
+	it("imports sparse outbound messages from the stable account id", async () => {
+		makeTempHome();
+		listDirectMessagesViaBirdMock.mockResolvedValueOnce({
+			success: true,
+			conversations: [
+				{
+					id: "25401953-66",
+					participants: [
+						{ id: "25401953" },
+						{ id: "66", username: "pat", name: "Pat" },
+					],
+					messages: [],
+				},
+			],
+			events: [
+				{
+					id: "dm_sparse_outbound",
+					conversationId: "25401953-66",
+					text: "Sparse outbound",
+					createdAt: "2026-04-25T20:00:00.000Z",
+					senderId: "25401953",
+					recipientId: "66",
+					recipient: { id: "66", username: "pat", name: "Pat" },
+				},
+			],
+		});
+		const { syncDirectMessagesViaCachedBird } = await import("./dms-live");
+
+		await expect(
+			syncDirectMessagesViaCachedBird({
+				account: "acct_primary",
+				limit: 5,
+				refresh: true,
+			}),
+		).resolves.toEqual(
+			expect.objectContaining({
+				source: "bird",
+				conversations: 1,
+				messages: 1,
+			}),
+		);
+		expect(getConversationThread("25401953-66")?.messages).toEqual([
+			expect.objectContaining({
+				id: "dm_sparse_outbound",
+				direction: "outbound",
+			}),
+		]);
+	});
+
+	it("uses the live bird account id when the selected account has no stored external id", async () => {
+		makeTempHome();
+		getNativeDb()
+			.prepare("update accounts set external_user_id = null where id = ?")
+			.run("acct_primary");
+		listDirectMessagesViaBirdMock.mockResolvedValueOnce({
+			success: true,
+			conversations: [
+				{
+					id: "25401953-77",
+					participants: [{ id: "77", username: "casey", name: "Casey" }],
+					messages: [],
+					lastMessageAt: "2026-04-25T20:00:00.000Z",
+				},
+			],
+			events: [
+				{
+					id: "dm_sparse_live_id",
+					conversationId: "25401953-77",
+					text: "Sparse self from live id",
+					createdAt: "2026-04-25T20:00:00.000Z",
+					senderId: "77",
+					sender: { id: "77", username: "casey", name: "Casey" },
+				},
+			],
+		});
+		const { syncDirectMessagesViaCachedBird } = await import("./dms-live");
+
+		await expect(
+			syncDirectMessagesViaCachedBird({
+				account: "acct_primary",
+				limit: 5,
+				refresh: true,
+			}),
+		).resolves.toEqual(
+			expect.objectContaining({
+				source: "bird",
+				conversations: 1,
+				messages: 1,
+			}),
+		);
+		expect(getConversationThread("25401953-77")?.messages).toEqual([
+			expect.objectContaining({
+				id: "dm_sparse_live_id",
+				direction: "inbound",
+			}),
+		]);
+		expect(
+			getNativeDb()
+				.prepare("select external_user_id from accounts where id = ?")
+				.get("acct_primary"),
+		).toEqual({ external_user_id: "25401953" });
+
+		const cached = await syncDirectMessagesViaCachedBird({
+			account: "acct_primary",
+			limit: 5,
+		});
+
+		expect(cached).toEqual(
+			expect.objectContaining({
+				source: "cache",
+				conversations: 1,
+				messages: 1,
+			}),
+		);
+		expect(listDirectMessagesViaBirdMock).toHaveBeenCalledTimes(1);
+	});
+
+	it("treats a blank stored external id as missing", async () => {
+		makeTempHome();
+		getNativeDb()
+			.prepare("update accounts set external_user_id = '  ' where id = ?")
+			.run("acct_primary");
+		listDirectMessagesViaBirdMock.mockResolvedValueOnce({
+			success: true,
+			conversations: [
+				{
+					id: "25401953-88",
+					participants: [{ id: "88", username: "blankcase", name: "Blank" }],
+					messages: [],
+				},
+			],
+			events: [
+				{
+					id: "dm_blank_external_id",
+					conversationId: "25401953-88",
+					text: "Blank external id repaired",
+					createdAt: "2026-04-25T20:00:00.000Z",
+					senderId: "88",
+					sender: { id: "88", username: "blankcase", name: "Blank" },
+				},
+			],
+		});
+		const { syncDirectMessagesViaCachedBird } = await import("./dms-live");
+
+		await expect(
+			syncDirectMessagesViaCachedBird({
+				account: "acct_primary",
+				limit: 5,
+				refresh: true,
+			}),
+		).resolves.toEqual(
+			expect.objectContaining({
+				source: "bird",
+				conversations: 1,
+				messages: 1,
+			}),
+		);
+		expect(
+			getNativeDb()
+				.prepare("select external_user_id from accounts where id = ?")
+				.get("acct_primary"),
+		).toEqual({ external_user_id: "25401953" });
 	});
 
 	it("handles outbound latest messages and skips incomplete bird events", async () => {

@@ -1350,6 +1350,7 @@ dmsCommand
 	.option("--inbox <kind>", "all, accepted, or requests", "all")
 	.option("--max-pages <n>", "Additional accepted/request pages to sync", "0")
 	.option("--all-pages", "Fetch all accepted/request pages while syncing")
+	.option("--page-delay-ms <n>", "Delay between live DM page requests", "0")
 	.option("--participant <value>")
 	.option("--min-followers <n>", "Minimum sender follower count")
 	.option("--max-followers <n>", "Maximum sender follower count")
@@ -1381,7 +1382,15 @@ dmsCommand
 			options.maxPages,
 			"--max-pages",
 		);
-		if (inbox === undefined || maxPages === undefined) {
+		const pageDelayMs = parseNonNegativeIntegerOption(
+			options.pageDelayMs,
+			"--page-delay-ms",
+		);
+		if (
+			inbox === undefined ||
+			maxPages === undefined ||
+			pageDelayMs === undefined
+		) {
 			return;
 		}
 		if (options.refresh) {
@@ -1391,6 +1400,7 @@ dmsCommand
 				...(inbox !== "all" ? { inbox } : {}),
 				...(maxPages > 0 ? { maxPages } : {}),
 				...(options.allPages ? { allPages: true } : {}),
+				...(pageDelayMs > 0 ? { pageDelayMs } : {}),
 				refresh: true,
 				cacheTtlMs: Number(options.cacheTtl) * 1000,
 			});
@@ -1441,6 +1451,7 @@ dmsCommand
 	.option("--inbox <kind>", "all, accepted, or requests", "all")
 	.option("--max-pages <n>", "Additional accepted/request pages to sync", "0")
 	.option("--all-pages", "Fetch all accepted/request pages")
+	.option("--page-delay-ms <n>", "Delay between live DM page requests", "0")
 	.option("--cache-ttl <seconds>", "Live-cache freshness window", "120")
 	.option("--refresh", "Bypass live-cache freshness window")
 	.action(async (options) => {
@@ -1449,7 +1460,15 @@ dmsCommand
 			options.maxPages,
 			"--max-pages",
 		);
-		if (inbox === undefined || maxPages === undefined) {
+		const pageDelayMs = parseNonNegativeIntegerOption(
+			options.pageDelayMs,
+			"--page-delay-ms",
+		);
+		if (
+			inbox === undefined ||
+			maxPages === undefined ||
+			pageDelayMs === undefined
+		) {
 			return;
 		}
 		const result = await syncDirectMessagesViaCachedBird({
@@ -1458,6 +1477,7 @@ dmsCommand
 			...(inbox !== "all" ? { inbox } : {}),
 			...(maxPages > 0 ? { maxPages } : {}),
 			...(options.allPages ? { allPages: true } : {}),
+			...(pageDelayMs > 0 ? { pageDelayMs } : {}),
 			refresh: Boolean(options.refresh),
 			cacheTtlMs: Number(options.cacheTtl) * 1000,
 		});

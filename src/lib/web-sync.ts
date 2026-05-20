@@ -219,6 +219,7 @@ const WEB_SYNC_PLANS: Record<WebSyncKind, WebSyncPlan> = {
 					...(options.allPages !== undefined
 						? { allPages: options.allPages }
 						: {}),
+					pageDelayMs: inbox === "requests" ? 750 : 0,
 					refresh: true,
 				});
 				return [

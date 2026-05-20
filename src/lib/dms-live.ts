@@ -4,13 +4,18 @@ import {
 	type BirdDmConversation,
 	type BirdDmEvent,
 	type BirdDmUser,
+	getAuthenticatedBirdAccountEffect,
 	listDirectMessagesViaBirdEffect,
 } from "./bird";
 import { getNativeDb } from "./db";
 import { runEffectPromise } from "./effect-runtime";
 import { readSyncCache, writeSyncCache } from "./sync-cache";
 import type { XurlMentionUser } from "./types";
-import { upsertProfileFromXUser } from "./x-profile";
+import {
+	buildExternalProfileId,
+	randomAvatarHue,
+	upsertProfileFromXUser,
+} from "./x-profile";
 
 export const DEFAULT_DMS_CACHE_TTL_MS = 2 * 60_000;
 
@@ -20,6 +25,7 @@ export interface SyncDirectMessagesViaCachedBirdOptions {
 	inbox?: "all" | "accepted" | "requests";
 	maxPages?: number;
 	allPages?: boolean;
+	pageDelayMs?: number;
 	refresh?: boolean;
 	cacheTtlMs?: number;
 }
@@ -37,21 +43,32 @@ function assertBirdLimit(limit: number) {
 	}
 }
 
+function normalizeExternalUserId(value: string | null | undefined) {
+	const trimmed = value?.trim();
+	return trimmed ? trimmed : undefined;
+}
+
 function resolveAccount(db: Database, accountId?: string) {
 	const row = accountId
 		? (db
-				.prepare("select id, handle from accounts where id = ?")
-				.get(accountId) as { id: string; handle: string } | undefined)
+				.prepare(
+					"select id, handle, external_user_id from accounts where id = ?",
+				)
+				.get(accountId) as
+				| { id: string; handle: string; external_user_id: string | null }
+				| undefined)
 		: (db
 				.prepare(
 					`
-          select id, handle
+          select id, handle, external_user_id
           from accounts
           order by is_default desc, created_at asc
           limit 1
           `,
 				)
-				.get() as { id: string; handle: string } | undefined);
+				.get() as
+				| { id: string; handle: string; external_user_id: string | null }
+				| undefined);
 
 	if (!row) {
 		throw new Error(`Unknown account: ${accountId ?? "default"}`);
@@ -60,6 +77,7 @@ function resolveAccount(db: Database, accountId?: string) {
 	return {
 		accountId: row.id,
 		username: row.handle.replace(/^@/, ""),
+		externalUserId: normalizeExternalUserId(row.external_user_id),
 	};
 }
 
@@ -81,14 +99,29 @@ function toXUser(user: BirdDmUser): XurlMentionUser {
 	};
 }
 
-function collectUsers(payload: {
-	conversations: BirdDmConversation[];
-	events: BirdDmEvent[];
-}) {
+function collectUsers(
+	payload: {
+		conversations: BirdDmConversation[];
+		events: BirdDmEvent[];
+	},
+	accountExternalUserId?: string,
+) {
 	const users = new Map<string, BirdDmUser>();
 	const add = (user?: BirdDmUser) => {
 		if (!user?.id) return;
+		if (
+			accountExternalUserId &&
+			user.id === accountExternalUserId &&
+			!user.username &&
+			!user.name
+		) {
+			return;
+		}
 		users.set(user.id, { ...users.get(user.id), ...user });
+	};
+	const addId = (id?: string) => {
+		if (!id || users.has(id) || id === accountExternalUserId) return;
+		users.set(id, { id });
 	};
 
 	for (const conversation of payload.conversations) {
@@ -99,6 +132,8 @@ function collectUsers(payload: {
 	for (const event of payload.events) {
 		add(event.sender);
 		add(event.recipient);
+		addId(event.senderId);
+		addId(event.recipientId);
 	}
 	return users;
 }
@@ -106,9 +141,14 @@ function collectUsers(payload: {
 function getLocalExternalUserId(
 	users: Map<string, BirdDmUser>,
 	accountUsername: string,
+	accountExternalUserId?: string,
 ) {
+	if (accountExternalUserId) {
+		return accountExternalUserId;
+	}
+	const normalizedAccountUsername = accountUsername.toLowerCase();
 	for (const user of users.values()) {
-		if (user.username === accountUsername) {
+		if (user.username?.toLowerCase() === normalizedAccountUsername) {
 			return user.id;
 		}
 	}
@@ -123,21 +163,180 @@ function getLatestEvent(events: BirdDmEvent[]) {
 	)[0];
 }
 
+function assertAuthenticatedBirdAccountMatches({
+	accountId,
+	username,
+	externalUserId,
+	liveUsername,
+	liveExternalUserId,
+}: {
+	accountId: string;
+	username: string;
+	externalUserId?: string;
+	liveUsername: string;
+	liveExternalUserId?: string;
+}) {
+	if (
+		externalUserId &&
+		liveExternalUserId &&
+		liveExternalUserId === externalUserId
+	) {
+		return;
+	}
+	if (externalUserId && liveExternalUserId) {
+		throw new Error(
+			`bird is authenticated as user ${liveExternalUserId}; refusing to sync into ${accountId} (${externalUserId})`,
+		);
+	}
+	if (liveUsername.toLowerCase() !== username.toLowerCase()) {
+		throw new Error(
+			`bird is authenticated as @${liveUsername}; refusing to sync into ${accountId} (@${username})`,
+		);
+	}
+}
+
+function persistAccountExternalUserId(
+	db: Database,
+	accountId: string,
+	externalUserId: string,
+) {
+	db.prepare(
+		`
+    update accounts
+    set external_user_id = ?
+    where id = ?
+      and (external_user_id is null or trim(external_user_id) = '')
+    `,
+	).run(externalUserId, accountId);
+}
+
+function conversationIdReferencesExternalUserId(
+	conversationId: string,
+	externalUserId: string,
+) {
+	return conversationId.split(/[^0-9]+/).includes(externalUserId);
+}
+
+function payloadReferencesExternalUserId(
+	payload: {
+		conversations: BirdDmConversation[];
+		events: BirdDmEvent[];
+	},
+	externalUserId: string,
+) {
+	for (const conversation of payload.conversations) {
+		if (
+			conversationIdReferencesExternalUserId(conversation.id, externalUserId)
+		) {
+			return true;
+		}
+		if (conversation.participants.some((user) => user.id === externalUserId)) {
+			return true;
+		}
+	}
+	for (const event of payload.events) {
+		if (
+			event.senderId === externalUserId ||
+			event.recipientId === externalUserId
+		) {
+			return true;
+		}
+		if (
+			event.sender?.id === externalUserId ||
+			event.recipient?.id === externalUserId
+		) {
+			return true;
+		}
+		if (
+			event.conversationId &&
+			conversationIdReferencesExternalUserId(
+				event.conversationId,
+				externalUserId,
+			)
+		) {
+			return true;
+		}
+	}
+	return false;
+}
+
+function ensureSparseLocalProfile(
+	db: Database,
+	externalUserId: string,
+	accountUsername: string,
+) {
+	const profileId = buildExternalProfileId(externalUserId);
+	const existing = db
+		.prepare("select id from profiles where id = ? or handle = ? limit 1")
+		.get(profileId, accountUsername) as { id: string } | undefined;
+	if (existing) {
+		return existing.id;
+	}
+
+	const createdAt = new Date().toISOString();
+	db.prepare(
+		`
+    insert into profiles (
+      id, handle, display_name, bio, followers_count, following_count,
+      public_metrics_json, avatar_hue, entities_json, raw_json, created_at
+    ) values (?, ?, ?, '', 0, 0, '{}', ?, '{}', '{}', ?)
+    `,
+	).run(
+		profileId,
+		accountUsername,
+		accountUsername,
+		randomAvatarHue(accountUsername),
+		createdAt,
+	);
+	return profileId;
+}
+
 function mergeDirectMessagesIntoLocalStore(
 	db: Database,
 	accountId: string,
 	accountUsername: string,
+	accountExternalUserId: string | undefined,
 	payload: {
 		conversations: BirdDmConversation[];
 		events: BirdDmEvent[];
 	},
 ) {
-	const users = collectUsers(payload);
-	const localExternalUserId = getLocalExternalUserId(users, accountUsername);
+	const users = collectUsers(payload, accountExternalUserId);
+	const localExternalUserId = getLocalExternalUserId(
+		users,
+		accountUsername,
+		accountExternalUserId,
+	);
+	if (
+		accountExternalUserId &&
+		(payload.conversations.length > 0 || payload.events.length > 0) &&
+		!payloadReferencesExternalUserId(payload, accountExternalUserId)
+	) {
+		throw new Error(
+			`bird DM payload does not include @${accountUsername}; refusing to sync into ${accountId}`,
+		);
+	}
+	if (
+		!localExternalUserId &&
+		(payload.conversations.length > 0 || payload.events.length > 0)
+	) {
+		throw new Error(
+			`bird DM payload does not include @${accountUsername}; refusing to sync into ${accountId}`,
+		);
+	}
 	const profilesByExternalId = new Map<string, string>();
 	for (const user of users.values()) {
 		const resolved = upsertProfileFromXUser(db, toXUser(user));
 		profilesByExternalId.set(user.id, resolved.profile.id);
+	}
+	if (
+		accountExternalUserId &&
+		!profilesByExternalId.has(accountExternalUserId)
+	) {
+		profilesByExternalId.set(
+			accountExternalUserId,
+			ensureSparseLocalProfile(db, accountExternalUserId, accountUsername),
+		);
 	}
 
 	const eventsByConversation = new Map<string, BirdDmEvent[]>();
@@ -188,7 +387,7 @@ function mergeDirectMessagesIntoLocalStore(
 				conversation.participants.find(
 					(user) =>
 						user.id !== localExternalUserId &&
-						user.username !== accountUsername,
+						user.username?.toLowerCase() !== accountUsername.toLowerCase(),
 				) ?? conversation.participants[0];
 			if (!participant) {
 				continue;
@@ -204,7 +403,8 @@ function mergeDirectMessagesIntoLocalStore(
 			);
 			const latestInbound =
 				latest?.senderId !== localExternalUserId &&
-				latest?.sender?.username !== accountUsername;
+				latest?.sender?.username?.toLowerCase() !==
+					accountUsername.toLowerCase();
 			const inboxKind =
 				conversation.inboxKind ??
 				(conversation.isMessageRequest ? "request" : "accepted");
@@ -229,7 +429,8 @@ function mergeDirectMessagesIntoLocalStore(
 				}
 				const direction =
 					senderId === localExternalUserId ||
-					event.sender?.username === accountUsername
+					event.sender?.username?.toLowerCase() ===
+						accountUsername.toLowerCase()
 						? "outbound"
 						: "inbound";
 				upsertMessage.run(
@@ -253,6 +454,7 @@ export function syncDirectMessagesViaCachedBirdEffect({
 	inbox = "all",
 	maxPages,
 	allPages = false,
+	pageDelayMs,
 	refresh = false,
 	cacheTtlMs,
 }: SyncDirectMessagesViaCachedBirdOptions = {}): Effect.Effect<
@@ -282,20 +484,45 @@ export function syncDirectMessagesViaCachedBirdEffect({
 			? Date.now() - new Date(cached.updatedAt).getTime()
 			: Number.POSITIVE_INFINITY;
 
-		const payload =
-			!refresh && cached && cacheAgeMs <= ttlMs
-				? cached.value
-				: yield* listDirectMessagesViaBirdEffect({
-						maxResults: limit,
-						...(inbox !== "all" ? { inbox } : {}),
-						...(typeof maxPages === "number" ? { maxPages } : {}),
-						...(allPages ? { allPages } : {}),
-					});
+		const cacheHit = !refresh && cached && cacheAgeMs <= ttlMs;
+		let accountExternalUserId = resolvedAccount.externalUserId;
+		let payload: {
+			conversations: BirdDmConversation[];
+			events: BirdDmEvent[];
+		};
+		if (cacheHit) {
+			payload = cached.value;
+		} else {
+			const authenticated = yield* getAuthenticatedBirdAccountEffect();
+			assertAuthenticatedBirdAccountMatches({
+				accountId: resolvedAccount.accountId,
+				username: resolvedAccount.username,
+				externalUserId: resolvedAccount.externalUserId,
+				liveUsername: authenticated.username,
+				liveExternalUserId: authenticated.id,
+			});
+			accountExternalUserId ??= authenticated.id;
+			if (!resolvedAccount.externalUserId && accountExternalUserId) {
+				persistAccountExternalUserId(
+					db,
+					resolvedAccount.accountId,
+					accountExternalUserId,
+				);
+			}
+			payload = yield* listDirectMessagesViaBirdEffect({
+				maxResults: limit,
+				...(inbox !== "all" ? { inbox } : {}),
+				...(typeof maxPages === "number" ? { maxPages } : {}),
+				...(allPages ? { allPages } : {}),
+				...(typeof pageDelayMs === "number" ? { pageDelayMs } : {}),
+			});
+		}
 
 		mergeDirectMessagesIntoLocalStore(
 			db,
 			resolvedAccount.accountId,
 			resolvedAccount.username,
+			accountExternalUserId,
 			payload,
 		);
 		if (!cached || refresh || cacheAgeMs > ttlMs) {
@@ -304,7 +531,7 @@ export function syncDirectMessagesViaCachedBirdEffect({
 
 		return {
 			ok: true,
-			source: cached && !refresh && cacheAgeMs <= ttlMs ? "cache" : "bird",
+			source: cacheHit ? "cache" : "bird",
 			accountId: resolvedAccount.accountId,
 			conversations: payload.conversations.length,
 			messages: payload.events.length,

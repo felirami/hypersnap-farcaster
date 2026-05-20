@@ -1,6 +1,6 @@
 # CHANGELOG
 
-## 0.6.0 - Unreleased
+## 0.6.1 - Unreleased
 
 ### Added
 
@@ -17,6 +17,7 @@
 ### Fixed
 
 - Show DM message requests across accounts instead of filtering them by the active sidebar account.
+- Verify the live `bird` account before DM sync, preserve stable account IDs for sparse DM payloads, and pace request-page imports.
 - Align DM profile stat labels and values consistently in the web detail panel.
 - Keep outbound DM bubble text readable by separating inbound and outbound bubble color classes in the web UI.
 - Link AI digest tweet citations on readable text instead of leaking raw `tweet_...` ids when the model cites a local tweet by prefixed id.
