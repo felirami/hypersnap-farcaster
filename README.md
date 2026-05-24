@@ -1,3 +1,33 @@
+# Hypersnap Farcaster
+
+Local-first Farcaster memory and workspace for Hypersnap.org.
+
+This project starts as a Farcaster-oriented port of [steipete/birdclaw](https://github.com/steipete/birdclaw), but it is not using the Birdclaw/OpenClaw naming. The goal is a clean Farcaster-native app: local SQLite storage, scriptable CLI, searchable casts/profiles/follows, mentions/replies, link intelligence, and agent-friendly automation.
+
+Status: fresh public fork/port scaffold. v0 target is read-only local mirror via Neynar, then Farcaster-native schema/UI cleanup.
+
+## v0 Scope
+
+- Neynar-backed sync adapter
+- local SQLite mirror for casts, profiles, follows, reactions, mentions/replies, and links
+- search and profile hydration
+- follow graph queries
+- local web UI adapted from the upstream Birdclaw architecture
+- agent/script-friendly CLI JSON
+
+Deferred until the read-only core is solid:
+
+- posting/replying writes
+- moderation writes
+- Direct Cast / DM support
+- Mini App publishing (explicitly not in scope right now)
+
+## Upstream attribution
+
+This repo is initialized from Birdclaw by Peter Steinberger and keeps the MIT license. The original README starts below for implementation context while the port is underway.
+
+---
+
 # birdclaw 🪶 — Local Twitter memory in SQLite: archives, DMs, likes, bookmarks
 
 `birdclaw` is a local-first Twitter workspace: archive import, cached live reads, focused triage, and reply flows in one local web app + CLI. Built by [@steipete](https://github.com/steipete/).

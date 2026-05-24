@@ -1,15 +1,15 @@
 {
-	"name": "birdclaw",
-	"version": "0.6.1",
-	"description": "Local Twitter memory in SQLite for archives, DMs, likes, bookmarks, and moderation",
-	"homepage": "https://github.com/steipete/birdclaw#readme",
+	"name": "hypersnap-farcaster",
+	"version": "0.0.0",
+	"description": "Local-first Farcaster memory and workspace for Hypersnap.org",
+	"homepage": "https://github.com/felirami/hypersnap-farcaster#readme",
 	"license": "MIT",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/steipete/birdclaw.git"
+		"url": "git+https://github.com/felirami/hypersnap-farcaster.git"
 	},
 	"bin": {
-		"birdclaw": "bin/birdclaw.mjs"
+		"hypersnap-farcaster": "bin/hypersnap-farcaster.mjs"
 	},
 	"files": [
 		"bin/",

@@ -7,11 +7,11 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const require = createRequire(import.meta.url);
 const tsxLoader = pathToFileURL(require.resolve("tsx")).href;
-const birdclawCli = join(packageRoot, "src", "cli.ts");
+const hypersnapCli = join(packageRoot, "src", "cli.ts");
 
 const child = spawn(
 	process.execPath,
-	["--import", tsxLoader, birdclawCli, ...process.argv.slice(2)],
+	["--import", tsxLoader, hypersnapCli, ...process.argv.slice(2)],
 	{
 		stdio: "inherit",
 		env: process.env,
