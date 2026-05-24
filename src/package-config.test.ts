@@ -23,9 +23,10 @@ function resolvedVitestConfig() {
 
 describe("package configuration", () => {
 	it("runs the published bin wrapper without tsx CLI startup", async () => {
+		const [binTarget] = Object.values(packageJson.bin);
 		const { stdout } = await execFileAsync(
 			process.execPath,
-			["bin/birdclaw.mjs", "--version"],
+			[binTarget ?? "bin/hypersnap-farcaster.mjs", "--version"],
 			{
 				cwd: new URL("..", import.meta.url),
 				env: process.env,

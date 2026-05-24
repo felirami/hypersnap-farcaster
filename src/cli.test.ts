@@ -562,7 +562,7 @@ describe("cli", () => {
 				"3000",
 			],
 			expect.objectContaining({
-				cwd: expect.stringContaining("birdclaw"),
+				cwd: expect.stringContaining("hypersnap-farcaster"),
 				env: expect.objectContaining({ BIRDCLAW_LOCAL_WEB: "1" }),
 				stdio: "inherit",
 			}),

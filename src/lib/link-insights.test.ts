@@ -350,7 +350,7 @@ describe("link insights", () => {
 		});
 
 		const insights = getLinkInsights({
-			range: "today",
+			range: "all",
 			now: new Date("2026-05-11T12:00:00.000Z"),
 		});
 
