@@ -258,6 +258,82 @@ export interface FollowEventsTable {
 	snapshot_id: string;
 }
 
+export interface FarcasterProfilesTable {
+	fid: number;
+	username: string;
+	display_name: string;
+	bio: string;
+	pfp_url: string | null;
+	followers_count: number;
+	following_count: number;
+	power_badge: number;
+	custody_address: string | null;
+	verified_addresses_json: string;
+	raw_json: string;
+	created_at: string;
+	updated_at: string;
+}
+
+export interface FarcasterCastsTable {
+	hash: string;
+	author_fid: number;
+	text: string;
+	created_at: string;
+	parent_hash: string | null;
+	parent_url: string | null;
+	root_parent_url: string | null;
+	channel_id: string | null;
+	embeds_json: string;
+	mentions_json: string;
+	raw_json: string;
+	reply_count: number;
+	recast_count: number;
+	like_count: number;
+	updated_at: string;
+}
+
+export interface FarcasterCastAccountEdgesTable {
+	account_id: string;
+	cast_hash: string;
+	kind: "authored" | "home" | "mention" | "thread_context";
+	first_seen_at: string;
+	last_seen_at: string;
+	seen_count: number;
+	source: string;
+	raw_json: string;
+	updated_at: string;
+}
+
+export interface FarcasterCastReactionsTable {
+	cast_hash: string;
+	fid: number;
+	type: "like" | "recast";
+	reacted_at: string | null;
+	source: string;
+	raw_json: string;
+	updated_at: string;
+}
+
+export interface FarcasterFollowEdgesTable {
+	account_fid: number;
+	direction: "followers" | "following";
+	fid: number;
+	source: string;
+	current: number;
+	first_seen_at: string;
+	last_seen_at: string;
+	ended_at: string | null;
+	updated_at: string;
+}
+
+export interface FarcasterSyncCheckpointsTable {
+	scope: string;
+	account_fid: number;
+	cursor: string | null;
+	metadata_json: string;
+	updated_at: string;
+}
+
 export interface BirdclawDatabase {
 	accounts: AccountsTable;
 	profiles: ProfilesTable;
@@ -281,6 +357,12 @@ export interface BirdclawDatabase {
 	follow_snapshots: FollowSnapshotsTable;
 	follow_snapshot_members: FollowSnapshotMembersTable;
 	follow_events: FollowEventsTable;
+	farcaster_profiles: FarcasterProfilesTable;
+	farcaster_casts: FarcasterCastsTable;
+	farcaster_cast_account_edges: FarcasterCastAccountEdgesTable;
+	farcaster_cast_reactions: FarcasterCastReactionsTable;
+	farcaster_follow_edges: FarcasterFollowEdgesTable;
+	farcaster_sync_checkpoints: FarcasterSyncCheckpointsTable;
 }
 
 let nativeDb: Database | undefined;
@@ -563,6 +645,86 @@ const BASE_SCHEMA_SQL = `
     snapshot_id text not null
   );
 
+  create table if not exists farcaster_profiles (
+    fid integer primary key,
+    username text not null unique,
+    display_name text not null,
+    bio text not null default '',
+    pfp_url text,
+    followers_count integer not null default 0,
+    following_count integer not null default 0,
+    power_badge integer not null default 0,
+    custody_address text,
+    verified_addresses_json text not null default '{}',
+    raw_json text not null default '{}',
+    created_at text not null,
+    updated_at text not null
+  );
+
+  create table if not exists farcaster_casts (
+    hash text primary key,
+    author_fid integer not null,
+    text text not null,
+    created_at text not null,
+    parent_hash text,
+    parent_url text,
+    root_parent_url text,
+    channel_id text,
+    embeds_json text not null default '[]',
+    mentions_json text not null default '[]',
+    raw_json text not null default '{}',
+    reply_count integer not null default 0,
+    recast_count integer not null default 0,
+    like_count integer not null default 0,
+    updated_at text not null
+  );
+
+  create table if not exists farcaster_cast_account_edges (
+    account_id text not null,
+    cast_hash text not null,
+    kind text not null,
+    first_seen_at text not null,
+    last_seen_at text not null,
+    seen_count integer not null default 1,
+    source text not null,
+    raw_json text not null default '{}',
+    updated_at text not null,
+    primary key (account_id, cast_hash, kind)
+  );
+
+  create table if not exists farcaster_cast_reactions (
+    cast_hash text not null,
+    fid integer not null,
+    type text not null,
+    reacted_at text,
+    source text not null,
+    raw_json text not null default '{}',
+    updated_at text not null,
+    primary key (cast_hash, fid, type)
+  );
+
+  create table if not exists farcaster_follow_edges (
+    account_fid integer not null,
+    direction text not null,
+    fid integer not null,
+    source text not null,
+    current integer not null default 1,
+    first_seen_at text not null,
+    last_seen_at text not null,
+    ended_at text,
+    updated_at text not null,
+    primary key (account_fid, direction, fid)
+  );
+
+  create table if not exists farcaster_sync_checkpoints (
+    scope text not null,
+    account_fid integer not null,
+    cursor text,
+    metadata_json text not null default '{}',
+    updated_at text not null,
+    primary key (scope, account_fid)
+  );
+
   create virtual table if not exists tweets_fts using fts5(
     tweet_id unindexed,
     text
@@ -611,6 +773,16 @@ const INDEX_SQL = `
   create index if not exists idx_follow_edges_profile on follow_edges(profile_id, current);
   create index if not exists idx_follow_snapshots_account on follow_snapshots(account_id, direction, completed_at desc);
   create index if not exists idx_follow_events_account on follow_events(account_id, direction, kind, event_at desc);
+  create index if not exists idx_farcaster_profiles_username on farcaster_profiles(username);
+  create index if not exists idx_farcaster_casts_author_created on farcaster_casts(author_fid, created_at desc);
+  create index if not exists idx_farcaster_casts_created on farcaster_casts(created_at desc);
+  create index if not exists idx_farcaster_casts_parent on farcaster_casts(parent_hash, created_at asc);
+  create index if not exists idx_farcaster_casts_channel on farcaster_casts(channel_id, created_at desc);
+  create index if not exists idx_farcaster_cast_account_edges_kind_account on farcaster_cast_account_edges(kind, account_id, last_seen_at desc, cast_hash);
+  create index if not exists idx_farcaster_cast_reactions_fid on farcaster_cast_reactions(fid, type, updated_at desc);
+  create index if not exists idx_farcaster_follow_edges_current on farcaster_follow_edges(account_fid, direction, current, last_seen_at desc);
+  create index if not exists idx_farcaster_follow_edges_fid on farcaster_follow_edges(fid, current);
+  create index if not exists idx_farcaster_sync_checkpoints_updated on farcaster_sync_checkpoints(updated_at desc);
 `;
 
 function getColumnNames(db: Database, tableName: string): Set<string> {
@@ -886,6 +1058,90 @@ function ensureFollowGraphTables(db: Database) {
 	`);
 }
 
+function ensureFarcasterTables(db: Database) {
+	db.exec(`
+    create table if not exists farcaster_profiles (
+      fid integer primary key,
+      username text not null unique,
+      display_name text not null,
+      bio text not null default '',
+      pfp_url text,
+      followers_count integer not null default 0,
+      following_count integer not null default 0,
+      power_badge integer not null default 0,
+      custody_address text,
+      verified_addresses_json text not null default '{}',
+      raw_json text not null default '{}',
+      created_at text not null,
+      updated_at text not null
+    );
+
+    create table if not exists farcaster_casts (
+      hash text primary key,
+      author_fid integer not null,
+      text text not null,
+      created_at text not null,
+      parent_hash text,
+      parent_url text,
+      root_parent_url text,
+      channel_id text,
+      embeds_json text not null default '[]',
+      mentions_json text not null default '[]',
+      raw_json text not null default '{}',
+      reply_count integer not null default 0,
+      recast_count integer not null default 0,
+      like_count integer not null default 0,
+      updated_at text not null
+    );
+
+    create table if not exists farcaster_cast_account_edges (
+      account_id text not null,
+      cast_hash text not null,
+      kind text not null,
+      first_seen_at text not null,
+      last_seen_at text not null,
+      seen_count integer not null default 1,
+      source text not null,
+      raw_json text not null default '{}',
+      updated_at text not null,
+      primary key (account_id, cast_hash, kind)
+    );
+
+    create table if not exists farcaster_cast_reactions (
+      cast_hash text not null,
+      fid integer not null,
+      type text not null,
+      reacted_at text,
+      source text not null,
+      raw_json text not null default '{}',
+      updated_at text not null,
+      primary key (cast_hash, fid, type)
+    );
+
+    create table if not exists farcaster_follow_edges (
+      account_fid integer not null,
+      direction text not null,
+      fid integer not null,
+      source text not null,
+      current integer not null default 1,
+      first_seen_at text not null,
+      last_seen_at text not null,
+      ended_at text,
+      updated_at text not null,
+      primary key (account_fid, direction, fid)
+    );
+
+    create table if not exists farcaster_sync_checkpoints (
+      scope text not null,
+      account_fid integer not null,
+      cursor text,
+      metadata_json text not null default '{}',
+      updated_at text not null,
+      primary key (scope, account_fid)
+    );
+	`);
+}
+
 function backfillTweetCollections(db: Database) {
 	const now = new Date().toISOString();
 	const insert = db.prepare(`
@@ -963,6 +1219,7 @@ function initDatabase(options: InitDatabaseOptions = {}) {
 		ensureIdentitySearchIndexTable(nativeDb);
 		ensureLinkIndexTables(nativeDb);
 		ensureFollowGraphTables(nativeDb);
+		ensureFarcasterTables(nativeDb);
 		ensureSchemaIndexes(nativeDb);
 		if (options.seedDemoData !== false) {
 			ensureDemoData(nativeDb);
